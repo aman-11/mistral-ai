@@ -1,8 +1,8 @@
-## Dependency directories
-#node_modules/
-#
-## Environment variables
-#.env
-#
-##builds
-#dist/
+# Dependency directories
+node_modules/
+
+# Environment variables
+.env
+
+#builds
+dist/

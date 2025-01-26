@@ -1,29 +1,8 @@
 import {Mistral} from '@mistralai/mistralai'
-import {ChatCompletionResponse} from "@mistralai/mistralai/models/components";
+import { createClient } from '@supabase/supabase-js'
 import dotenv from "dotenv";
 dotenv.config();
 
-const apiKey = '89aQa0oqLiEQj2JrWpDkkcbCjFYFtOBJ';
-console.log('apiKey', apiKey)
-const client = new Mistral({apiKey: apiKey});
-
-// const chatResponse = await client.chat.complete({
-//     model: 'mistral-tiny',
-//     messages: [
-//         {role: 'system', content: 'When asked about value of apple, reply 1.666686. Reply with JSON'},
-//         {role: 'user', content: 'What is value of apple?'}
-//     ],
-//     temperature: 0.5, // lower value more deterministic
-//     responseFormat: {
-//         type: 'json_object'
-//     }
-// });
-
-// for await (const chunk of chatResponse){
-//     console.log(chunk.data.choices[0].delta.content);
-// }
-
-// console.log('Chat:', chatResponse.choices?.[0].message.content);
 
 /**
  * Retrieval -> Generation
@@ -40,60 +19,61 @@ const client = new Mistral({apiKey: apiKey});
  * 3. create a prompt
  * 4. LLMs
  * 5. response
- *
- *
  */
 
 /**
- * read document - A.1
- */
-import {RecursiveCharacterTextSplitter} from "@langchain/textsplitters";
-import fs from 'fs';
-async function textSplitter() {
-    const story = fs.readFileSync('./story.txt', 'utf8');
-
-    const splitter = new RecursiveCharacterTextSplitter({
-        chunkSize: 100,
-        chunkOverlap: 10,
-    });
-    const output = await splitter.createDocuments([story]);
-    const text =  output.map(value => value.pageContent)
-    return text;
-}
-
-const texts = await textSplitter();
-
-// const exampleChunk = text[0];
-//
-// const embedding = await client.embeddings.create({
-//     model: 'mistral-embed',
-//     inputs: [exampleChunk]
-// })
-//
-// console.log('embedding', JSON.stringify(embedding))
-
-/**
- * A.3 part1 create embedding (still we haven't stored in DB)
- * create a function createEmbeddings(chunks) that turns all the text
- * into embedding (vectorial representation ) and then we will store in our vector database (supabase)
- * embeddingAndContent : [
- *      content: 'text',
- *      embedding: [4807baf77eaa46fab01548217732f9a0, 4807baf77eaa46fab01548217732f9a0]
- * ]
+ * Data has been created by data.ts
+ * here we are focusing on Generation
+ * 1. ge the user input
+ * 2. create embedding for user input for similarity search
+ * 3. do semantic search in vector  DB and get search result, retrieveMatches(#userInpuut.embedding)
+ * 4. generate chat response from combining #3 and #1 and ask mistral to generate
  */
 
-async function createEmbeddings(texts: string[]) {
-    const {data} = await client.embeddings.create({
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+const mistralClient = new Mistral({apiKey: process.env.MISTRAL_AI});
+const supabase = createClient(supabaseUrl as string, supabaseKey as string)
+
+const userInput = 'What is the name of old clockmaker?'
+
+async function createEmbedding(userInput : string) {
+    const {data} = await mistralClient.embeddings.create({
         model: 'mistral-embed',
-        inputs: texts
+        inputs: [userInput]
     })
 
-    return texts.map((content: string, index: number) => ({
-        content,
-        embedding: data[index].embedding
-    }))
+   return data[0].embedding;
 }
 
-console.log(await createEmbeddings(texts))
+async function retrieveMatches(embedding: number[]) {
+    const { data } = await supabase.rpc('match_handbook_docs',
+        {
+            'query_embedding': embedding,
+            'match_threshold': 0.70, // how similar it is, higher it will be more picky we are
+            'match_count': 5 // more relevant data
+        }
+    );
 
+    return data.map((chunk: { content: any; }) => chunk.content).join(' ');
+}
 
+async function generateChatResponse(context: string, query: string) {
+    const chatResponse = await mistralClient.chat.complete({
+        model: 'mistral-tiny',
+        messages: [
+            {role: 'system', content: context},
+            {role: 'user', content: query}
+        ],
+        temperature: 0.5, // lower value more deterministic
+    });
+
+    return chatResponse.choices?.[0].message.content
+}
+
+const embedding = await createEmbedding(userInput) as number[];
+const matches = await retrieveMatches(embedding);
+console.log('matches', matches)
+const response = await generateChatResponse(matches, userInput)
+console.log('response', response)
